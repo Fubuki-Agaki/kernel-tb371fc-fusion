@@ -56,6 +56,7 @@ extern void kb_hid_resume(void);
 #define FLASH_SECTOR_SIZE      4096
 #define NVT_FLASH_END_FLAG_LEN 3
 #define RESET_STATE_INIT       0xa0
+#define RESET_STATE_NORMAL_RUN 0xa3
 #define RESET_STATE_MAX        0xaf
 #define EVENT_MAP_FWINFO         0x78
 #define EVENT_MAP_HOST_CMD       0x50

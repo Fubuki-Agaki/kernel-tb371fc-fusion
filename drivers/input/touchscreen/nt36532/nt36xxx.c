@@ -2459,7 +2459,20 @@ static int nvt_fw_status_show(struct seq_file *s, void *v)
 	nvt_set_page(nvt_ts->mmap[0] | 0x60);
 	CTP_SPI_READ(nvt_ts->client, buf, sizeof(buf));
 	mutex_unlock(&nvt_ts->lock);
-	seq_printf(s, "%02X\n", buf[1]);
+	/*
+	 * TB371FC resume interlock (bampudding #6): the display HAL blocks
+	 * the entire unblank transaction while the touch reset byte is A0.
+	 * On resume the firmware image has already downloaded successfully
+	 * (fw_update_stat == 1), but NORMAL_RUN may depend on the
+	 * panel/unblank transaction that the HAL is withholding.  Break that
+	 * circular dependency only after touch resume completed.
+	 */
+	if (buf[1] == RESET_STATE_INIT && bTouchIsAwake && nvt_ts->fw_update_stat) {
+		pr_err("NVT-ts TB371FC resume interlock: raw reset state A0, report A3 to display HAL\n");
+		seq_printf(s, "%02X\n", RESET_STATE_NORMAL_RUN);
+	} else {
+		seq_printf(s, "%02X\n", buf[1]);
+	}
 	return 0;
 }
 
