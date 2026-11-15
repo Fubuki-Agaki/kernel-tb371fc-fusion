@@ -3321,8 +3321,14 @@ enum tfa_error tfa_dev_start(struct tfa_device *tfa, int next_profile, int vstep
 			    (profile_name != NULL) &&
 			    (strstr(profile_name, "nonRotation") == NULL)) {
 				if (tfa9894_get_target_chan_sel(sel, tfa->dev_idx,
-								&spks, &dcs) == 0)
-					tfa9894_change_chan_sel(tfa, spks, dcs);
+								&spks, &dcs) == 0) {
+					int err_sel = tfa9894_change_chan_sel(tfa, spks, dcs);
+
+					pr_info("p269: dev %d (%s) profile %s: sel=%d SPKS=%d DCS=%d rc=%d\n",
+						tfa->dev_idx,
+						tfaContDeviceName(tfa->cnt, tfa->dev_idx),
+						profile_name, sel, spks, dcs, err_sel);
+				}
 			}
 		}
 		/* Make sure internal oscillator is running for DSP devices (non-dsp and max1 this is no-op) */

@@ -43,7 +43,20 @@ static const int tfa9894_vol_table[] = {
 	0x00, 0x24, 0x48, 0x6c, 0x90, 0xb4, 0xd8, 0xff,
 };
 
-static int g_tfa9894_chan_sel = TFA9894_CHAN_SEL_UNSET;
+/*
+ * Start in the 0-deg orientation.  The stock module's selector lives in
+ * .bss and therefore boots as 0, which arms the default map entry that
+ * covers all four amplifiers (pri pair -> TDM slots 0/1, sec pair -> 2/3)
+ * on the first tfa_dev_start().  Booting as TFA9894_CHAN_SEL_UNSET (-1)
+ * instead left the p269 application guard "sel != -1" permanently false:
+ * this ROM's userspace only ever READS TFA_CHIP_SELECTOR (twice at audio
+ * init) and never writes TFA9894_CHAN_SELECTOR -- there is no such control
+ * name anywhere in /vendor|/system lib64 and no set path ever logged -- so
+ * the secondary amplifier pair stayed on its DSP-patch defaults and was
+ * silent (top two speakers only).  Userspace can still rotate via the
+ * TFA9894_CHAN_SELECTOR control at runtime.
+ */
+static int g_tfa9894_chan_sel;
 
 int tfa9894_get_store_chan_sel(void)
 {
