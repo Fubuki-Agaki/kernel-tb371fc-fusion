@@ -7723,16 +7723,18 @@ int dsi_display_enable(struct dsi_display *display)
 		}
 	}
 
-	/* Block sending pps command if modeset is due to fps difference */
+	/* Send DSC PPS command on enable/modeset if DSC is enabled */
 	if ((mode->priv_info->dsc_enabled) &&
 			!(mode->dsi_mode_flags & DSI_MODE_FLAG_DMS_FPS)) {
-		mode->priv_info->dsc.pic_width *= display->ctrl_count;
+		mode->priv_info->dsc.pic_width = mode->timing.h_active * display->ctrl_count;
 		rc = dsi_panel_update_pps(display->panel);
 		if (rc) {
 			DSI_ERR("[%s] panel pps cmd update failed, rc=%d\n",
 				display->name, rc);
 			goto error;
 		}
+		DSI_INFO("[%s] panel pps cmd updated successfully (pic_w=%d, pic_h=%d)\n",
+			display->name, mode->priv_info->dsc.pic_width, mode->priv_info->dsc.pic_height);
 	}
 
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
