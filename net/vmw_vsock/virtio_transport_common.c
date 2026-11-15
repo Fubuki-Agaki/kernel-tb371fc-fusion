@@ -163,7 +163,13 @@ static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
 	struct virtio_vsock_pkt *pkt;
 	u32 pkt_len = info->pkt_len;
 
-	src_cid = vm_sockets_get_local_cid();
+	/* Use the CID the socket is bound to rather than the transport-wide
+	 * local one: the peer replies to src_cid and matches it against its
+	 * remote_addr, so a socket that keeps a CID different from the
+	 * transport default (e.g. the loopback transport, where a client may
+	 * connect to any CID such as VMADDR_CID_HOST) would never be found
+	 * by vsock_find_connected_socket(). */
+	src_cid = vsk->local_addr.svm_cid;
 	src_port = vsk->local_addr.svm_port;
 	if (!info->remote_cid) {
 		dst_cid	= vsk->remote_addr.svm_cid;
