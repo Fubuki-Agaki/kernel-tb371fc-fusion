@@ -336,7 +336,18 @@ static struct mi2s_conf mi2s_intf_conf[MI2S_MAX];
 /* Default configuration of TDM channels */
 static struct dev_config tdm_rx_cfg[TDM_INTERFACE_MAX][TDM_PORT_MAX] = {
 	{ /* PRI TDM */
-		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* RX_0 */
+		/*
+		 * TB371FC: all four TFA9894 sit on PRI_TDM_RX_0 and the frame
+		 * is four 32-bit slots wide -- the amps' container config
+		 * (TDMSLOTS=3 -> 4 slots, TDMSLLN/TDMSSIZE=31 -> 32 bits,
+		 * TDMNBCK=128 BCLK/FS) and the DT BCLK (0x5dc000 = 6.144 MHz
+		 * = 48k*4*32) agree.  The CAF baseline's mono default made
+		 * msm_be_hw_params_fixup() clamp this backend to one channel,
+		 * so the ADM only drove slot 0 and the secondary amp pair
+		 * (TDMSLOTS/TDMSPKS 2/3) stayed silent: only the top speakers
+		 * sounded.  The vendor kernel runs this port at four channels.
+		 */
+		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 4}, /* RX_0 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* RX_1 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* RX_2 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* RX_3 */
@@ -399,7 +410,12 @@ static struct dev_config tdm_rx_cfg[TDM_INTERFACE_MAX][TDM_PORT_MAX] = {
 
 static struct dev_config tdm_tx_cfg[TDM_INTERFACE_MAX][TDM_PORT_MAX] = {
 	{ /* PRI TDM */
-		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* TX_0 */
+		/*
+		 * TB371FC: the same four TFA9894 transmit their IV-sense
+		 * slots back on TX_0 (container TDMCF2E=1 with TDMCF2S
+		 * 0/1/2/3), so keep the capture side four channels wide too.
+		 */
+		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 4}, /* TX_0 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* TX_1 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* TX_2 */
 		{SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1}, /* TX_3 */
@@ -8584,7 +8600,15 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 
 	if ((pdata->tdm_max_slots <= 0) || (pdata->tdm_max_slots >
 	     TDM_MAX_SLOTS)) {
-		pdata->tdm_max_slots = TDM_MAX_SLOTS;
+		/*
+		 * TB371FC: the PRI TDM frame is four 32-bit slots wide --
+		 * the DT programs 0x5dc000 (6.144 MHz = 48k*4*32) of BCLK and
+		 * the TFA9894 containers expect TDMSLOTS=4/TDMNBCK=128 BCLK/FS.
+		 * The CAF fallback of 8 slots advertises a 256-bit frame the
+		 * clock can never deliver, which desynchronises the port and
+		 * pops the amps at stream start.
+		 */
+		pdata->tdm_max_slots = 4;
 		dev_err(&pdev->dev, "%s: Using default tdm max slot: %d\n",
 				__func__, pdata->tdm_max_slots);
 	}
