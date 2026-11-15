@@ -573,6 +573,18 @@ struct kgsl_snapshot_object {
 
 struct kgsl_device *kgsl_get_device(int dev_idx);
 
+/*
+ * Android gpuservice consumes gpu_mem/gpu_mem_total through a pinned eBPF
+ * map.  KGSL already maintains per-process allocations; report their
+ * absolute totals, including an aggregate, when allocations change.
+ */
+#ifdef CONFIG_TRACE_GPU_MEM
+void kgsl_gpu_mem_trace_change(struct kgsl_process_private *priv, s64 delta);
+#else
+static inline void kgsl_gpu_mem_trace_change(
+	struct kgsl_process_private *priv, s64 delta) {}
+#endif
+
 static inline void kgsl_process_add_stats(struct kgsl_process_private *priv,
 	unsigned int type, uint64_t size)
 {
@@ -580,6 +592,7 @@ static inline void kgsl_process_add_stats(struct kgsl_process_private *priv,
 
 	if (ret > priv->stats[type].max)
 		priv->stats[type].max = ret;
+	kgsl_gpu_mem_trace_change(priv, (s64)size);
 	add_mm_counter(current->mm, MM_UNRECLAIMABLE, (size >> PAGE_SHIFT));
 }
 
@@ -591,6 +604,7 @@ static inline void kgsl_process_sub_stats(struct kgsl_process_private *priv,
 	struct mm_struct *mm;
 
 	atomic_long_sub(size, &priv->stats[type].cur);
+	kgsl_gpu_mem_trace_change(priv, -(s64)size);
 	pid_struct = find_get_pid(pid_nr(priv->pid));
 	if (pid_struct) {
 		task = get_pid_task(pid_struct, PIDTYPE_PID);

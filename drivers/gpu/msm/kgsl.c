@@ -29,6 +29,31 @@
 #include "kgsl_sync.h"
 #include "kgsl_trace.h"
 
+#ifdef CONFIG_TRACE_GPU_MEM
+#include <trace/events/gpu_mem.h>
+
+/* Aggregate process-mapped GPU allocations for Android's gpuMem eBPF map. */
+static atomic64_t kgsl_gpu_mem_accounted = ATOMIC64_INIT(0);
+
+void kgsl_gpu_mem_trace_change(struct kgsl_process_private *priv, s64 delta)
+{
+	s64 global;
+	u64 process_total = 0;
+	int i;
+
+	/*
+	 * Each KGSL process allocation is accounted once at add_stats() and
+	 * removed once at sub_stats(). No per-object tracking ABI is changed.
+	 */
+	global = atomic64_add_return(delta, &kgsl_gpu_mem_accounted);
+	for (i = 0; i < KGSL_MEM_ENTRY_MAX; i++)
+		process_total += atomic_long_read(&priv->stats[i].cur);
+
+	trace_gpu_mem_total(0, 0, max_t(s64, global, 0));
+	trace_gpu_mem_total(0, pid_nr(priv->pid), process_total);
+}
+#endif
+
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
