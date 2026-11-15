@@ -3319,10 +3319,32 @@ static int32_t nvt_ts_resume(struct device *dev)
 #if NVT_TOUCH_SUPPORT_HW_RST
 	gpio_set_value(ts->reset_gpio, 1);
 #endif
-	if (nvt_update_firmware(BOOT_UPDATE_FIRMWARE_NAME)) {
-		NVT_ERR("download firmware failed, ignore check fw state\n");
-	} else {
-		nvt_check_fw_reset_state(RESET_STATE_REK);
+	/*
+	 * TB371FC Instant Wake:
+	 * When panel power is preserved across sleep, TDDI SRAM retains its firmware.
+	 * Check whether firmware is already resident and running in SRAM via a single SPI read (<50us).
+	 * If resident (state >= RESET_STATE_INIT), skip the 186ms SPI firmware download.
+	 * If not resident (cold boot or ESD recovery), execute the download.
+	 */
+	{
+		bool need_fw_download = true;
+		if (ts->fw_update_stat) {
+			uint8_t state_buf[8] = {0};
+			nvt_set_page(ts->mmap->EVENT_BUF_ADDR | EVENT_MAP_RESET_COMPLETE);
+			state_buf[0] = EVENT_MAP_RESET_COMPLETE;
+			if (CTP_SPI_READ(ts->client, state_buf, 6) == 0) {
+				if (state_buf[1] >= RESET_STATE_INIT && state_buf[1] <= RESET_STATE_MAX) {
+					NVT_LOG("FW resident in SRAM (0x%02X), instant wake!\n", state_buf[1]);
+					need_fw_download = false;
+				}
+			}
+		}
+		if (need_fw_download) {
+			NVT_LOG("FW not resident, downloading firmware...\n");
+			if (nvt_update_firmware(BOOT_UPDATE_FIRMWARE_NAME)) {
+				NVT_ERR("download firmware failed\n");
+			}
+		}
 	}
 
 //#if !WAKEUP_GESTURE
