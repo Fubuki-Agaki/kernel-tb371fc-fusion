@@ -3585,14 +3585,20 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 		tfa98xx->spk_id_level);
 
 	/*
-	 * stock parity (W90-D123): container-file selection (stock 0x14b44:
-	 * cbz tfa+0x3C0 -> second, otherwise first; pointer parked at
-	 * tfa+0x328, the named tfa98xx->fw_name member here).
+	 * stock parity (W90-D123): container-file selection.  Re-verified
+	 * against the shipped module's tfa98xx_probe+0x138 (0x14b44:
+	 * ldr w2,[x20,#960]; 0x14b50 cbz w2 -> 0x14b68, which loads
+	 * .data+0x70 = fw_name_first/YC; the fall-through at 0x14b54 loads
+	 * .data+0x78 = fw_name_second/QS).  So stock boots strap==0 on the
+	 * YC container and strap!=0 on the QS one -- the earlier reading
+	 * ("cbz -> second") had the branches swapped, which made every
+	 * flag=1 unit (this board) tune all four amps with the wrong
+	 * speaker file.  The QS tuning is what the stock flag=1 unit runs.
 	 */
 	if (tfa98xx->spk_id_level == 0)
-		tfa98xx->fw_name = fw_name_second;
-	else
 		tfa98xx->fw_name = fw_name_first;
+	else
+		tfa98xx->fw_name = fw_name_second;
 
 	pr_info("addr=0x%x\n", i2c->addr);
 	/* Power up! */
