@@ -4313,6 +4313,13 @@ int afe_send_slot_mapping_cfg_v2(
 	if (ret < 0)
 		pr_err("%s: AFE send slot mapping for port 0x%x failed ret = %d\n",
 				__func__, port_id, ret);
+	else
+		pr_info("tdmx: slot_mapping_v2 0x%x num_ch=%d off=%d,%d,%d,%d\n",
+			port_id, slot_mapping_cfg->num_channel,
+			slot_mapping_cfg->offset[0],
+			slot_mapping_cfg->offset[1],
+			slot_mapping_cfg->offset[2],
+			slot_mapping_cfg->offset[3]);
 	return ret;
 }
 
@@ -4435,6 +4442,11 @@ int afe_tdm_port_start(u16 port_id, struct afe_tdm_port_config *tdm_port,
 	param_hdr.instance_id = INSTANCE_ID_0;
 	param_hdr.param_id = AFE_PARAM_ID_TDM_CONFIG;
 	param_hdr.param_size = sizeof(struct afe_param_id_tdm_cfg);
+
+	pr_info("tdmx: afe_tdm_port_start 0x%x ch=%d nslots=%d slotw=%d mask=0x%x sync_src=%d\n",
+		port_id, tdm_port->tdm.num_channels,
+		tdm_port->tdm.nslots_per_frame, tdm_port->tdm.slot_width,
+		tdm_port->tdm.slot_mask, tdm_port->tdm.sync_src);
 
 	ret = q6afe_pack_and_set_param_in_band(port_id,
 					       q6audio_get_port_index(port_id),

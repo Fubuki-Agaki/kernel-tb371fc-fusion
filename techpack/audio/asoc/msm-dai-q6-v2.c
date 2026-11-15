@@ -9393,6 +9393,11 @@ static int msm_dai_q6_tdm_set_channel_map(struct snd_soc_dai *dai,
 					AFE_SLOT_MAPPING_OFFSET_INVALID;
 
 			slot_mapping_v2->num_channel = rx_num;
+			pr_info("tdmx: set_channel_map rx_num=%d off=%d,%d,%d,%d\n",
+				rx_num, rx_slot[0],
+				rx_num > 1 ? rx_slot[1] : -1,
+				rx_num > 2 ? rx_slot[2] : -1,
+				rx_num > 3 ? rx_slot[3] : -1);
 		} else {
 			if (!rx_slot) {
 				dev_err(dai->dev, "%s: rx slot not found\n",
@@ -9650,6 +9655,9 @@ static int msm_dai_q6_tdm_hw_params(struct snd_pcm_substream *substream,
 	tdm->num_channels = dai_data->channels;
 	tdm->sample_rate = dai_data->rate;
 	tdm->bit_width = dai_data->bitwidth;
+	pr_info("tdmx: dai hw_params ch=%d rate=%d bw=%d nslots=%d slotw=%d\n",
+		tdm->num_channels, tdm->sample_rate, tdm->bit_width,
+		tdm->nslots_per_frame, tdm->slot_width);
 	/*
 	 * port slot config is the same as group slot config
 	 * port slot mask should be set according to offset

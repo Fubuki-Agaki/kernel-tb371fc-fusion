@@ -4206,6 +4206,9 @@ static int msm_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
 			       tdm_rx_cfg[TDM_PRI][TDM_0].bit_format);
 		rate->min = rate->max = tdm_rx_cfg[TDM_PRI][TDM_0].sample_rate;
+		pr_info("tdmx: fixup PRI_TDM_RX_0 -> ch=%d fmt=%d rate=%d\n",
+			channels->min, tdm_rx_cfg[TDM_PRI][TDM_0].bit_format,
+			rate->min);
 		break;
 
 	case MSM_BACKEND_DAI_PRI_TDM_TX_0:
@@ -4688,6 +4691,9 @@ static int kona_tdm_snd_hw_params(struct snd_pcm_substream *substream,
 
 		pr_debug("%s: tdm rx slot_width %d slots %d slot_mask %x\n",
 			__func__, slot_width, slots, slot_mask);
+		pr_info("tdmx: be hw_params rx ch=%d slots=%d mask=0x%x off=%d,%d,%d,%d\n",
+			channels, slots, slot_mask, slot_offset[0],
+			slot_offset[1], slot_offset[2], slot_offset[3]);
 
 		ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, slot_mask,
 			slots, slot_width);
