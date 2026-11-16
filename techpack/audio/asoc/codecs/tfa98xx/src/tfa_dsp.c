@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <linux/module.h>
 #include "../inc/dbgprint.h"
 #include "../inc/tfa_container.h"
 #include "../inc/tfa.h"
@@ -65,6 +66,18 @@ void tfa9894_ops(struct tfa_device_ops *ops);
 
 /* calibration done executed */
 #define TFA_MTPEX_POS           TFA98XX_KEY2_PROTECTED_MTP0_MTPEX_POS /**/
+
+/*
+ * p280-mute (stock parity): run the CF firmware soft-mute handshake on the
+ * family-2 devices the way the stock ko does -- CFSM held while entering the
+ * operating state at start, CFSM fade before powerdown at stop.  Without it
+ * the amp engages/disengages at full level and every stream start/stop is
+ * audible as a click.  0 disables (A/B testing).
+ */
+static int mute_seq_fix = 1;
+module_param(mute_seq_fix, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(mute_seq_fix,
+		 "use the stock CF soft-mute sequencing on start/stop (1=on)");
 
 /* TASK-072: TFA9894 rotation engine lives in the tfa9894 unit. */
 #include "../../tfa9894/inc/tfa9894.h"
@@ -3144,6 +3157,34 @@ enum Tfa98xx_Error tfaRunMute(struct tfa_device *tfa)
 			if (tries == AMPOFFWAIT_TRIES)
 				return Tfa98xx_Error_Other;
 		}
+	} else if (tfa->tfa_family == 2 && mute_seq_fix && !tfa->is_probus_device) {
+		/*
+		 * p280-mute (stock parity): the stock ko arms the CF firmware
+		 * soft-mute sequence (CFSM, reg 0x51 bit3) before it tears the
+		 * device down, so the DSP fades its output to silence before
+		 * powerdown.  Our family-2 path previously skipped this
+		 * entirely: powerdown cut the amp while the output was still
+		 * at full level, which is audible as a click at stream stop.
+		 * Write CFSM only (dev_ops.set_mute -- not the generic wrapper,
+		 * which would also cut AMPE immediately and defeat the fade),
+		 * then give the DSP time to run the MUTETO-gated fade.
+		 */
+		err = tfa->dev_ops.set_mute(tfa, 1);
+		if (err != Tfa98xx_Error_Ok)
+			return err;
+
+		/* the amp disengages when the fade completes; tolerate a
+		 * timeout (some states keep SWS set while muted) */
+		do {
+			status = TFA_GET_BF(tfa, SWS);
+			if (status == 0)
+				break;
+			msleep_interruptible(10);
+			tries++;
+		} while (tries < AMPOFFWAIT_TRIES);
+
+		if (tfa->verbose || tries == AMPOFFWAIT_TRIES)
+			pr_debug("tfaRunMute: family2 muted (SWS waits %d)\n", tries);
 	}
 
 	return err;
@@ -3334,12 +3375,16 @@ enum tfa_error tfa_dev_start(struct tfa_device *tfa, int next_profile, int vstep
 		/* Make sure internal oscillator is running for DSP devices (non-dsp and max1 this is no-op) */
 		tfa98xx_set_osc_powerdown(tfa, 0);
 
-		/* Go to the Operating state */
-#if 0
-		tfa_dev_set_state(tfa, TFA_STATE_OPERATING | TFA_STATE_MUTE, 0);
-#else
-		tfa_dev_set_state(tfa, TFA_STATE_OPERATING, 0);
-#endif
+		/* Go to the Operating state.
+		 * p280-mute (stock parity): stock passes OPERATING|MUTE so the
+		 * amp enters operating while the CF firmware soft-mute (CFSM) is
+		 * held; the sound path then fades up when the ASoC-level sync
+		 * unmute clears CFSM after every device has started.  The old
+		 * #if 0 here dropped the MUTE modifier, so each freshly
+		 * cold-started DSP engaged its amplifier at full level directly
+		 * out of reset -- the start-of-stream click. */
+		tfa_dev_set_state(tfa,
+			TFA_STATE_OPERATING | (mute_seq_fix ? TFA_STATE_MUTE : 0), 0);
 	}
 
 	active_profile = tfa_dev_get_swprof(tfa);
