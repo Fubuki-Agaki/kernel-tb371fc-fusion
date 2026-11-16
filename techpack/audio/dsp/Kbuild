@@ -213,6 +213,13 @@ CDEFINES +=	-DANI_LITTLE_BYTE_ENDIAN \
 
 KBUILD_CPPFLAGS += $(CDEFINES)
 
+# clang 21 added -Wdefault-const-init-{field,var}-unsafe diagnostics that no
+# 4.19-era vendor code satisfies (reachable only on a clean rebuild, where the
+# -Werror above would turn them fatal).  Silence them where the compiler knows
+# about them; older clang keeps its historical behaviour.
+EXTRA_CFLAGS += $(call cc-option,-Wno-default-const-init-field-unsafe,)
+EXTRA_CFLAGS += $(call cc-option,-Wno-default-const-init-var-unsafe,)
+
 # Currently, for versions of gcc which support it, the kernel Makefile
 # is disabling the maybe-uninitialized warning.  Re-enable it for the
 # AUDIO driver.  Note that we must use EXTRA_CFLAGS here so that it

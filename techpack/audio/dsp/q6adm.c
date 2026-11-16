@@ -3056,11 +3056,6 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 	struct adm_device_endpoint_payload ep2_payload;
 	int ep1_payload_size = 0;
 	int ep2_payload_size = 0;
-
-	if (port_id == 0x9000)
-		pr_info("tdmx: adm_open 0x9000 ch=%d rate=%d bw=%d topo=0x%x app=%d acdb=%d\n",
-			channel_mode, rate, bit_width, topology, app_type,
-			acdb_id);
 	int ret = 0;
 	int port_idx, flags;
 	int copp_idx = -1;
@@ -3068,6 +3063,11 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 	void *adm_params = NULL;
 	int param_size;
 	int num_ec_ref_rx_chans = this_adm.num_ec_ref_rx_chans;
+
+	if (port_id == 0x9000)
+		pr_info("tdmx: adm_open 0x9000 ch=%d rate=%d bw=%d topo=0x%x app=%d acdb=%d\n",
+			channel_mode, rate, bit_width, topology, app_type,
+			acdb_id);
 
 	pr_debug("%s:port %#x path:%d rate:%d mode:%d perf_mode:%d,topo_id %d\n",
 		 __func__, port_id, path, rate, channel_mode, perf_mode,
