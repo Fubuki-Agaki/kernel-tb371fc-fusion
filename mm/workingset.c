@@ -272,12 +272,12 @@ static void lru_gen_refault(struct page *page, void *shadow)
 	lruvec = mem_cgroup_lruvec(pgdat, memcg);
 	lrugen = &lruvec->lrugen;
 
-	/* 4.19 has no per-type workingset counters; use the shared ones */
-	mod_lruvec_state(lruvec, WORKINGSET_REFAULT, delta);
-
 	min_seq = READ_ONCE(lrugen->min_seq[type]);
 	if ((token >> LRU_REFS_WIDTH) != (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH)))
 		goto unlock;
+
+	/* 4.19 has no per-type workingset counters; use the shared ones */
+	mod_lruvec_state(lruvec, WORKINGSET_REFAULT, delta);
 
 	hist = lru_hist_from_seq(min_seq);
 	/* see the comment in page_lru_refs() */
