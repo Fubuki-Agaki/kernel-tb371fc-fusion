@@ -40,8 +40,6 @@ enum {
 };
 
 enum {
-	KYBER_MIN_DEPTH = 256,
-
 	/*
 	 * In order to prevent starvation of synchronous requests by a flood of
 	 * asynchronous requests, we reserve 25% of requests for synchronous
@@ -105,6 +103,9 @@ struct kyber_queue_data {
 
 	/* Target latencies in nanoseconds. */
 	u64 read_lat_nsec, write_lat_nsec;
+
+	/* Per-domain depth ceilings scaled to the hardware queue depth. */
+	unsigned int domain_depth[KYBER_NUM_DOMAINS];
 };
 
 struct kyber_hctx_data {
@@ -212,7 +213,7 @@ static void kyber_adjust_rw_depth(struct kyber_queue_data *kqd,
 		}
 	}
 
-	depth = clamp(depth, 1U, kyber_depth[sched_domain]);
+	depth = clamp(depth, 1U, kqd->domain_depth[sched_domain]);
 	if (depth != orig_depth)
 		sbitmap_queue_resize(&kqd->domain_tokens[sched_domain], depth);
 }
@@ -256,7 +257,7 @@ static void kyber_adjust_other_depth(struct kyber_queue_data *kqd,
 		}
 	}
 
-	depth = clamp(depth, 1U, kyber_depth[KYBER_OTHER]);
+	depth = clamp(depth, 1U, kqd->domain_depth[KYBER_OTHER]);
 	if (depth != orig_depth)
 		sbitmap_queue_resize(&kqd->domain_tokens[KYBER_OTHER], depth);
 }
@@ -284,7 +285,7 @@ static void kyber_stat_timer_fn(struct blk_stat_callback *cb)
 	 */
 	if (!blk_stat_is_active(kqd->cb) &&
 	    ((IS_BAD(read_status) || IS_BAD(write_status) ||
-	      kqd->domain_tokens[KYBER_OTHER].sb.depth < kyber_depth[KYBER_OTHER])))
+	      kqd->domain_tokens[KYBER_OTHER].sb.depth < kqd->domain_depth[KYBER_OTHER])))
 		blk_stat_activate_msecs(kqd->cb, 100);
 }
 
@@ -305,7 +306,7 @@ static int kyber_bucket_fn(const struct request *rq)
 static struct kyber_queue_data *kyber_queue_data_alloc(struct request_queue *q)
 {
 	struct kyber_queue_data *kqd;
-	unsigned int max_tokens;
+	unsigned int qdepth;
 	unsigned int shift;
 	int ret = -ENOMEM;
 	int i;
@@ -320,25 +321,27 @@ static struct kyber_queue_data *kyber_queue_data_alloc(struct request_queue *q)
 	if (!kqd->cb)
 		goto err_kqd;
 
-	/*
-	 * The maximum number of tokens for any scheduling domain is at least
-	 * the queue depth of a single hardware queue. If the hardware doesn't
-	 * have many tags, still provide a reasonable number.
-	 */
-	max_tokens = max_t(unsigned int, q->tag_set->queue_depth,
-			   KYBER_MIN_DEPTH);
+	qdepth = q->tag_set->queue_depth;
 	for (i = 0; i < KYBER_NUM_DOMAINS; i++) {
 		WARN_ON(!kyber_depth[i]);
 		WARN_ON(!kyber_batch_size[i]);
+		/*
+		 * Scale the NVMe-oriented ceilings (256/128/64) to the hardware
+		 * queue depth so they bind on shallow single-queue UFS, bounding
+		 * the background OTHER domain (F2FS GC / discard / async
+		 * writeback) relative to foreground IO. Allocate the sbitmap to
+		 * that ceiling directly; it is never resized larger.
+		 */
+		kqd->domain_depth[i] = max_t(unsigned int,
+					     min(kyber_depth[i], qdepth), 1U);
 		ret = sbitmap_queue_init_node(&kqd->domain_tokens[i],
-					      max_tokens, -1, false, GFP_KERNEL,
-					      q->node);
+					      kqd->domain_depth[i], -1, false,
+					      GFP_KERNEL, q->node);
 		if (ret) {
 			while (--i >= 0)
 				sbitmap_queue_free(&kqd->domain_tokens[i]);
 			goto err_cb;
 		}
-		sbitmap_queue_resize(&kqd->domain_tokens[i], kyber_depth[i]);
 	}
 
 	shift = kyber_sched_tags_shift(kqd);
@@ -403,9 +406,19 @@ static void kyber_ctx_queue_init(struct kyber_ctx_queue *kcq)
 		INIT_LIST_HEAD(&kcq->rq_list[i]);
 }
 
-static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
+static void kyber_depth_updated(struct blk_mq_hw_ctx *hctx)
 {
 	struct kyber_queue_data *kqd = hctx->queue->elevator->elevator_data;
+	struct blk_mq_tags *tags = hctx->sched_tags;
+	unsigned int shift = tags->bitmap_tags.sb.shift;
+
+	kqd->async_depth = (1U << shift) * KYBER_ASYNC_PERCENT / 100U;
+
+	sbitmap_queue_min_shallow_depth(&tags->bitmap_tags, kqd->async_depth);
+}
+
+static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
+{
 	struct kyber_hctx_data *khd;
 	int i;
 
@@ -446,8 +459,7 @@ static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
 	khd->batching = 0;
 
 	hctx->sched_data = khd;
-	sbitmap_queue_min_shallow_depth(&hctx->sched_tags->bitmap_tags,
-					kqd->async_depth);
+	kyber_depth_updated(hctx);
 
 	return 0;
 
@@ -506,17 +518,18 @@ static void kyber_limit_depth(unsigned int op, struct blk_mq_alloc_data *data)
 	}
 }
 
-static bool kyber_bio_merge(struct blk_mq_hw_ctx *hctx, struct bio *bio)
+static bool kyber_bio_merge(struct request_queue *q, struct bio *bio)
 {
+	struct blk_mq_ctx *ctx = blk_mq_get_ctx(q);
+	struct blk_mq_hw_ctx *hctx = blk_mq_map_queue(q, ctx->cpu);
 	struct kyber_hctx_data *khd = hctx->sched_data;
-	struct blk_mq_ctx *ctx = blk_mq_get_ctx(hctx->queue);
 	struct kyber_ctx_queue *kcq = &khd->kcqs[ctx->index_hw];
 	unsigned int sched_domain = kyber_sched_domain(bio->bi_opf);
 	struct list_head *rq_list = &kcq->rq_list[sched_domain];
 	bool merged;
 
 	spin_lock(&kcq->lock);
-	merged = blk_mq_bio_list_merge(hctx->queue, rq_list, bio);
+	merged = blk_mq_bio_list_merge(q, rq_list, bio);
 	spin_unlock(&kcq->lock);
 	blk_mq_put_ctx(ctx);
 
@@ -966,6 +979,7 @@ static struct elevator_type kyber_sched = {
 		.completed_request = kyber_completed_request,
 		.dispatch_request = kyber_dispatch_request,
 		.has_work = kyber_has_work,
+		.depth_updated = kyber_depth_updated,
 	},
 	.uses_mq = true,
 #ifdef CONFIG_BLK_DEBUG_FS
