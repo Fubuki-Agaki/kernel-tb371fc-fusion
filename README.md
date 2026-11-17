@@ -1,6 +1,6 @@
 # TB371FC Fusion Kernel — 4.19.325-perf++
 
-联想小新 Pad Pro 12.7 2021（**TB371FC**，高通 SM8250 / kona）的自定义内核。
+联想小新 Pad Pro 12.7 2023（**TB371FC**，高通 SM8250 / kona）的自定义内核。
 
 本仓库（**fusion**，`Fubuki-Agaki/kernel-tb371fc-fusion`）是一个集成开发 fork：
 以 [`smith-dog/kernel-tb371fc`](https://github.com/smith-dog/kernel-tb371fc) 的 **v2.2 谱系**为基线
