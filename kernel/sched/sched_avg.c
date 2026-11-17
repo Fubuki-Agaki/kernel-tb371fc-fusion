@@ -203,7 +203,6 @@ unsigned int sched_get_cpu_util(int cpu)
 
 	raw_spin_lock_irqsave(&rq->lock, flags);
 
-	util = rq->cfs.avg.util_avg;
 	capacity = capacity_orig_of(cpu);
 
 	util = rq->prev_runnable_sum + rq->grp_time.prev_runnable_sum;
