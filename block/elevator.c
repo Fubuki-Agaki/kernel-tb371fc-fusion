@@ -985,9 +985,9 @@ out:
 }
 
 /*
- * For blk-mq devices, we default to using mq-deadline, if available, for single
- * queue devices.  If deadline isn't available OR we have multiple queues,
- * default to "none".
+ * For single-queue blk-mq devices (e.g. UFS), prefer Kyber, falling back to
+ * mq-deadline.  If neither is available OR we have multiple queues, default
+ * to "none".
  */
 int elevator_init_mq(struct request_queue *q)
 {
@@ -1002,21 +1002,19 @@ int elevator_init_mq(struct request_queue *q)
 	if (unlikely(q->elevator))
 		goto out;
 
-	e = elevator_get(q, "mq-deadline", false);
+	/*
+	 * Kyber's latency-target feedback throttles the background domain
+	 * (async writes / discard / F2FS GC) to protect foreground read and
+	 * sync-write latency on shallow single-queue UFS. BFQ stays selectable
+	 * at runtime via the queue/scheduler sysfs knob.
+	 */
+	if (IS_ENABLED(CONFIG_MQ_IOSCHED_KYBER))
+		e = elevator_get(q, "kyber", false);
+	else
+		e = elevator_get(q, "mq-deadline", false);
 	if (!e)
 		goto out;
 
-	if (unlikely(q->elevator))
-		goto out;
-	if (IS_ENABLED(CONFIG_IOSCHED_BFQ)) {
-		e = elevator_get(q, "bfq", false);
-		if (!e)
-			goto out;
-	} else {
-		e = elevator_get(q, "mq-deadline", false);
-		if (!e)
-			goto out;
-	}
 	err = blk_mq_init_sched(q, e);
 	if (err)
 		elevator_put(e);
