@@ -3363,12 +3363,24 @@ enum tfa_error tfa_dev_start(struct tfa_device *tfa, int next_profile, int vstep
 			    (strstr(profile_name, "nonRotation") == NULL)) {
 				if (tfa9894_get_target_chan_sel(sel, tfa->dev_idx,
 								&spks, &dcs) == 0) {
-					int err_sel = tfa9894_change_chan_sel(tfa, spks, dcs);
+					int cur_spks = tfa_get_bf(tfa, TFA9894_BF_TDMSPKS);
+					int cur_dcs = tfa_get_bf(tfa, TFA9894_BF_TDMDCS);
+					/* change_chan_sel pulses TDME 0->1 even when the slots
+					 * are unchanged, glitching the live TDM stream on every
+					 * warm restart (volume change). Skip when already on target. */
+					if (cur_spks == spks && cur_dcs == dcs) {
+						pr_info("p269: dev %d (%s) profile %s: sel=%d SPKS=%d DCS=%d already set, skip\n",
+							tfa->dev_idx,
+							tfaContDeviceName(tfa->cnt, tfa->dev_idx),
+							profile_name, sel, spks, dcs);
+					} else {
+						int err_sel = tfa9894_change_chan_sel(tfa, spks, dcs);
 
-					pr_info("p269: dev %d (%s) profile %s: sel=%d SPKS=%d DCS=%d rc=%d\n",
-						tfa->dev_idx,
-						tfaContDeviceName(tfa->cnt, tfa->dev_idx),
-						profile_name, sel, spks, dcs, err_sel);
+						pr_info("p269: dev %d (%s) profile %s: sel=%d SPKS=%d DCS=%d rc=%d\n",
+							tfa->dev_idx,
+							tfaContDeviceName(tfa->cnt, tfa->dev_idx),
+							profile_name, sel, spks, dcs, err_sel);
+					}
 				}
 			}
 		}
@@ -4021,8 +4033,19 @@ enum tfa_error tfa_dev_set_state(struct tfa_device *tfa, enum tfa_state state, i
 
 	/* state modifiers */
 
-	if (state & TFA_STATE_MUTE)
-		tfa98xx_set_mute(tfa, Tfa98xx_Mute_Amplifier);
+	if (state & TFA_STATE_MUTE) {
+		/* Warm restart (e.g. volume change) finds the amp already live with
+		 * AMPE=1. The generic wrapper drops AMPE immediately and cuts the
+		 * playing output (pop). Hold only the CF soft-mute (CFSM) and let the
+		 * DSP fade, as tfaRunMute does; the sync unmute clears CFSM afterwards.
+		 * Cold start (AMPE=0) keeps the stock wrapper behaviour. */
+		if (tfa->tfa_family == 2 && mute_seq_fix &&
+		    !tfa->is_probus_device && tfa->dev_ops.set_mute &&
+		    TFA_GET_BF(tfa, AMPE) == 1)
+			tfa->dev_ops.set_mute(tfa, 1);
+		else
+			tfa98xx_set_mute(tfa, Tfa98xx_Mute_Amplifier);
+	}
 
 	if (state & TFA_STATE_UNMUTE)
 		tfa98xx_set_mute(tfa, Tfa98xx_Mute_Off);
