@@ -128,7 +128,22 @@ union swap_header {
  */
 struct reclaim_state {
 	unsigned long reclaimed_slab;
+#ifdef CONFIG_LRU_GEN
+	struct lru_gen_mm_walk *mm_walk;
+#endif
 };
+
+static inline void set_task_reclaim_state(struct task_struct *task,
+					  struct reclaim_state *rs)
+{
+	/* Check for an overwrite */
+	WARN_ON_ONCE(task->reclaim_state && rs);
+
+	/* Check for a NULLing of the reclaim_state */
+	WARN_ON_ONCE(!task->reclaim_state && !rs);
+
+	task->reclaim_state = rs;
+}
 
 #ifdef __KERNEL__
 

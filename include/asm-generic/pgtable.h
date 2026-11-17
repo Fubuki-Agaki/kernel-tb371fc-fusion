@@ -1152,4 +1152,20 @@ static inline bool arch_has_pfn_modify_check(void)
 #define mm_pmd_folded(mm)	__is_defined(__PAGETABLE_PMD_FOLDED)
 #endif
 
+#ifndef pmd_leaf
+static inline int pmd_leaf(pmd_t pmd) { return 0; }
+#endif
+
+#ifndef pud_leaf
+static inline int pud_leaf(pud_t pud) { return 0; }
+#endif
+
+#ifndef p4d_leaf
+static inline int p4d_leaf(p4d_t p4d) { return 0; }
+#endif
+
+#ifndef pud_index
+#define pud_index(addr)		(((addr) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
+#endif
+
 #endif /* _ASM_GENERIC_PGTABLE_H */

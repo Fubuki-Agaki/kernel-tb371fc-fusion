@@ -788,6 +788,28 @@ extern pgd_t tramp_pg_dir[PTRS_PER_PGD];
 
 extern int kern_addr_valid(unsigned long addr);
 
+/*
+ * 4.19 has no cpu_has_hw_af capability; __cpu_setup() sets TCR_HA at boot
+ * under CONFIG_ARM64_HW_AFDBM when the CPU implements the HW access flag.
+ */
+#define arch_has_hw_pte_young	arch_has_hw_pte_young
+static inline bool arch_has_hw_pte_young(void)
+{
+	return IS_ENABLED(CONFIG_ARM64_HW_AFDBM);
+}
+
+#define pmd_leaf	pmd_leaf
+static inline bool pmd_leaf(pmd_t pmd)
+{
+	return pmd_sect(pmd);
+}
+
+#define pud_leaf	pud_leaf
+static inline bool pud_leaf(pud_t pud)
+{
+	return pud_sect(pud);
+}
+
 #include <asm-generic/pgtable.h>
 
 void pgd_cache_init(void);
