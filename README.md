@@ -1,242 +1,138 @@
-# TB371FC Custom Kernel — 4.19.325-perf++
+# TB371FC Fusion Kernel — 4.19.325-perf++
 
-联想小新 Pad Pro 12.7 2021（TB371FC，高通 SM8250/kona）的自定义内核。
-基于联想 GPL 公开源码 + 完整 bring-up 补丁集。**v1.5 起 WiFi/音频/加速等
-全部驱动内建进内核镜像，功能开箱即用：刷入一个镜像即完成全部安装，无需
-任何载荷包或后续步骤。** KernelSU 以 LKM（可加载模块）形态运行，与内核
-镜像完全解耦。
+联想小新 Pad Pro 12.7 2021（**TB371FC**，高通 SM8250 / kona）的自定义内核。
 
-**v2.0 是本项目的 stable 基线跳变**：把厂商树的 linux-stable 从
-**v4.19.157 完整采纳到 v4.19.325**（168 个 stable 发布的内容，合并进本仓库
-`main`，tag `v4.19.157` / `v4.19.325` 已随仓库发布），并在采纳过程中修掉
-若干**只有整批吃 stable 才会暴露**的厂商缺陷（USB gadget 生命周期、
-driver-core `needs_suppliers` 链表、eMMC 调参 hold、TCP 数据竞争、
-early-entropy 初始化等，清单见下）。诊断插桩按发布惯例在本版关闭
-（dev 分支常驻，发布件 `strings Image` 已验无残留）。
+本仓库（**fusion**，`Fubuki-Agaki/kernel-tb371fc-fusion`）是一个集成开发 fork：
+以 [`smith-dog/kernel-tb371fc`](https://github.com/smith-dog/kernel-tb371fc) 的 **v2.2 谱系**为基线
+（联想 GPL 公开源码 + linux-stable **v4.19.157 → v4.19.325** 完整采纳 + 全量 bring-up 补丁集），
+合入 [`bampudding/linux_kernel_lenovo_tb371fc`](https://github.com/bampudding/linux_kernel_lenovo_tb371fc)
+的 TB371FC 修复，并在此之上**新增 MGLRU / BBRv3 等上游回移与本机原创修复**。
 
-**v2.2 = 音频 TFA9894 簇全量原厂对齐 + issue #1 修复 + 启动稳定性修复**：对音频
-功放模块 `tfa98xx`（含 tfa9894 器件簇，对照 stock 原厂 `audio_tfa98xx.ko` 逐函数
-反汇编收口）完成函数面/语料/行为三层全量对齐（review 终判 PASS）：修复 **issue #1**
-的 VoIP 失真根因——删除我方自造的 `nxp34663` 错误寄存器写块，按 stock 反汇编重建
-`TDM 位宽配置路径`（per-rev 跳表 + `pcm_sample_format` 门控，默认关=stock 行为）；
-新增 **SPK-ID 硬件变体容器选择**（GPIO1171 strap 按 stock 0x13630/0x14b44 选择
-YC/QS 容器——修复 4 功放错跑错误补偿配置导致的音质问题，`tfa98xx_YC.cnt` 随
-CONFIG_EXTRA_FIRMWARE 内建）；新增 stereo 控件 `TFA_CHIP_SELECTOR` 与 chan_sel
-无条件注册（stock 形态）；VoIP 通话实机回归 PASS（失真消失、通话中零错误）。
-另含 bootloop 根因修复（firmware 预热阻塞 init）与键盘 i2c-hid 的 shutdown
-空指针防卫。发布构建 **#789**（诊断插桩按惯例关闭）。
-
-**v2.1 = 驱动原厂看齐收官 + KernelSU v3.3.1+**：完成全部 21 个驱动记账单元
-对 stock 原厂二进制的全链对齐复审（函数面 / 反汇编逐簇 / 打印语料 / DT
-消费链四层，裁决链全部落档），随复审修复一批真实缺陷——充电 charger 命令
-0x51/0x53 双分支缺失（关闭充电命令从未发出）、i2c-hid 键盘幽灵输入设备、
-背光打印格式串、触摸/充电四单元非原厂打印与死配置项清理等；DT2W 双击
-亮屏路径改为 stock 原生形态（见 Release 说明的注意事项）。KernelSU 同步
-backslashxx 上游 **v3.3.1+**（145 提交；fork 的 boot v1/v2 修补支持保留；
-内核侧补两个符号导出与 path_umount 4.20 回移）。发布构建 **#743**。
-
-**A custom kernel for the Lenovo Xiaoxin Pad Pro 12.7 2021 (TB371FC,
-Qualcomm SM8250/kona)**, built from the official Lenovo GPL source dump
-plus a full bring-up patch series. v2.0 additionally adopts the whole
-linux-stable range **v4.19.157 → v4.19.325** into this vendor tree.
-KernelSU (backslashxx fork, master-synced to v3.3.1+ / 32704) runs as an **LKM**
-(loadable module) — fully decoupled from the kernel image, so KernelSU
-upgrades never require a kernel rebuild.
-
+> 基线功能（扬声器全链路、相机录像、指纹、充电保护、双击亮屏、OTG、VINTF、deep suspend、
+> KernelSU-as-LKM 等）继承自上游 v2.2，详见下方「代码来源」。本 README 重点说明 fusion 的
+> 新增内容与**全部代码出处**。最近一批改动逐条说明见 [CHANGES-20261117.md](CHANGES-20261117.md)。
 
 ---
 
-## 这是什么 / What is this
+## 功能 / Features
 
-本项目旨在**拓展内核能力**——在联想 GPL 公开源码之上，持续为设备带来超出原厂形态的功能支持：
+### 基线功能（继承 smith-dog v2.2）
+- **音视频**：4×TFA9894 功放 + CLO 音频核心栈全内建（功放固件烤入内核，冷启动出声更快）、相机录像、venus 硬解码
+- **充电**：充电保护（40–60% 电量保持）、电池养护开关、充电状态反馈死循环修复
+- **外设**：指纹供电轨修复、WiFi/蓝牙、双击亮屏（DT2W）、USB-C OTG 自动主机模式
+- **系统兼容**：VINTF 匹配（消除开机“设备内部出现问题”弹窗）、deep suspend
+- **Root**：KernelSU（backslashxx fork，v3.3.1+）以 **LKM** 运行，与内核镜像解耦，升级无需重编内核
+- **Docker**：iptables 全套 + xt_addrtype
+- **零依赖**：WiFi / 音频 / rmnet / gspca 全部内建，`lsmod` 仅 KernelSU 一行
 
-- **音视频**：扬声器全链路（4×TFA9894 功放 + CLO 音频核心栈，v1.5 全内建，
-  功放固件烤入内核，冷启动出声更快）、相机录像、venus 硬解码
-- **充电**：充电保护（40-60% 电量保持）、电池养护开关、充电状态自反馈死循环修复
-- **外设**：指纹（供电轨修复）、WiFi/蓝牙、双扬声器唤醒、双击亮屏
-  （DT2W：手势武装/退出时序重构 + 唤醒恢复改为面板上电前同步全量固件重刷）、
-  USB-C OTG 自动主机模式（外接键盘/U盘 即插即用，免手动开关）
-- **系统兼容**：VINTF 兼容（消除开机"设备内部出现问题"弹窗）、睡眠（deep suspend）
-- **内核基线（v2.0）**：linux-stable **v4.19.157 → v4.19.325** 完整采纳（168 个
-  stable 发布；相对上一次发布共 121 个提交进 `main`），采纳范围内逐文件按三方比对定案，厂商私有
-  机制（`use_out_ep`/`bound` 通知、EOPFEN 拆分、`mb()` 写 TRB 等）保留而非覆盖。
-  ⚠ 顺带纠正一处历史误标：**v1.x 横幅上的 `4.19.198` 是早期任务手改 `Makefile SUBLEVEL`
-  得到的假版本号，当时树内代码实为 4.19.157**（与 TB371FC stock 同版本）。本版起
-  横幅 `4.19.325-perf++` 与 `SUBLEVEL = 325` 与实际采纳内容一致
-- **v2.0 顺手修掉的厂商缺陷**（都是"整批吃 stable"才暴露的）：`f_ncm` 第二实例
-  错误路径解引用共享 uevent 设备指针（开机 26 s panic）→ 修；driver-core
-  `device_links_purge` 裸 `list_del` 让每次正常 `device_del` 都打印
-  LIST_POISON 腐败 → `list_del_init`；`mmc_start_request()` 把
-  `mmc_retune_hold()` 关在一个**无 Kconfig 条目**的 `#ifdef` 里（守卫恒假）→
-  每条 mmc 请求一次 `WARN_ON` → 复位到上游位置；`init/main.c` 合并留下的双份
-  early-entropy 块（`boot_init_stack_canary()` 跑两遍）→ 折叠；TZ PRNG 播种路径
-  在 .325 下的两处冻结（`dmac_inv_range` / `add_hwgenerator_randomness` 节流）→
-  修好并恢复完整 harvest；TCP `sock->sk` 数据竞争标注与原型；perf
-  `PERF_FORMAT_LOST` 系列（`read()` 由 32 B 变 40 B 可测）
-- **Root**：KernelSU v3.3.1+（32704，2026-10-25 同步上游 master e0183047）以 LKM 运行，管理器（Release 附带）授权即用
-- **Docker**：iptables 全套 + xt_addrtype（docker0 网络初始化规则依赖）已齐
-- **零依赖（v1.5）**：WiFi（2022 世代 qcacld 三仓）、音频全栈（Lenovo machine
-  驱动源码化重建 + tfa98xx codec）、rmnet 加速、gspca 全部内建；功放固件烤入；
-  WiFi 开机由内核自触发（约 15 秒内自动连网）。`lsmod` 仅有 KernelSU 一行。
-
-**Fixes over stock**: speaker audio chain, camera video recording, fingerprint
-power rail, charge-protection feedback loop (36/s kernel vote storm → 0),
-boot-time "internal problem" dialog (VINTF kernel-version/config match),
-panel wake, suspend, double-tap-to-wake, USB-C OTG auto-host,
-KernelSU-as-LKM decoupling.
-Full patch history in
-`tb371fc/scripts/` (p1–p371, 350 个入库).
-
+### Fusion 新增
+| 功能 | 说明 | 提交 |
+|---|---|---|
+| **Multi-Gen LRU (MGLRU)** | 上游分代 LRU 老化/回收框架回移到 4.19，`CONFIG_LRU_GEN=y`（默认开启 + STATS），改善内存超分与回收效率 | `ae701d9ef34a` |
+| **TCP BBRv3** | 上游 BBRv3 拥塞控制（`BBR_VERSION 3`）回移，设为默认拥塞控制（`CONFIG_DEFAULT_BBR=y`），含 4.19 兼容头与协议栈配套 | `c0a9b6cb5470` |
+| **dm-verity 调优** | kverityd 校验工作队列改 `WQ_HIGHPRI`、去 `WQ_UNBOUND`，降低 arm64 big.LITTLE 上的校验调度延迟 | `d936a991331c` |
+| **TFA9894 爆音修复** | 播放温重启（音量变化）爆音：① p269 同值 chan_sel 短路（避免 TDME 0→1 扰动）② 温重启仅保持 CFSM 软静音不切 AMPE；`mute_seq_fix` 参数门控（默认 1） | `c5eaca63c714` |
+| **bampudding #6 修复** | GPU 内存 eBPF 记账、dma-buf  teardown 防卫、a6xx 上电寄存器越界检查、触摸 instant-wake + HAL resume 互锁、DSC PPS pic_width 幂等 | 6 个 cherry-pick |
+| **vsock loopback** | 回移上游 5.9 loopback transport，使本机 `AF_VSOCK` 可用（无 VMCI/virtio/Hyper-V 总线时协议族此前不注册） | `8c4f94e16347` |
 
 ---
 
-## 怎么用 / How to use
+## 代码来源 / Provenance & Credits
 
-> 前提：Bootloader 已解锁（`fastboot flashing unlock`）。
+本树是**派生作品**，绝大部分代码来自下列上游 / 社区项目， fusion 仅在其上做适配与少量原创修复。
+按“来源 → 用途”列出，便于追溯与合规（GPL-2.0）。
 
-**一枚内核、两种 root 形态，各一个镜像即完成全部安装（v1.5 起的形态，v2.0 沿用）。**
+### 基线 / 驱动来源（继承上游）
+| 组成 | 来源 |
+|---|---|
+| 上游基线项目 | [`smith-dog/kernel-tb371fc`](https://github.com/smith-dog/kernel-tb371fc)（origin，v2.2 谱系；p1~p371 bring-up 补丁见 `tb371fc/scripts/`） |
+| 内核基线 | [`lss4/android_kernel_lenovo_paladin`](https://github.com/lss4/android_kernel_lenovo_paladin)（分支 11）——社区整理的联想官方 GPL 包（paladin TB-Q706F/Z，4.19.157，与 TB371FC stock 同版本，含联想板级代码） |
+| linux-stable 采纳 | [`gregkh/linux`](https://github.com/gregkh/linux) 分支 `linux-4.19.y`：**v4.19.157 → v4.19.325**（168 个 stable 发布）整体合并；tag `v4.19.157` / `v4.19.325` 指向上游原提交（Greg KH 署名） |
+| 显示栈 | CodeLinaro [msm-4.19 @ LA.UM.9.12.r1-18500-SMxx50.QSSI14.0](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0)（techpack/display） |
+| 音频核心栈 | 同上 CLO tag 的 [techpack/audio](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0/techpack/audio)（v1.5 起整体 =y 内建） |
+| 相机 KMD | 同上 CLO tag 的 [techpack/camera](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0/techpack/camera)（SPECTRA_CAMERA=y） |
+| 视频硬解 | [`MiCode/Xiaomi_Kernel_OpenSource`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource) kona 分支 msm_vidc |
+| USB 相机 | 内核主线 `drivers/media/usb/gspca` |
+| 触摸 / 背光 | [`tem423/android_kernel_lenovo_tb371fc`](https://github.com/tem423/android_kernel_lenovo_tb371fc)（nt36532 SPI 触摸 + ktz8866a/b 双芯片背光） |
+| WiFi | 2022 世代 qcacld 三仓（v5.2.0.190I）：qcacld-3.0 + [`arter97-mirror/caf_qca-wifi-host-cmn`](https://github.com/arter97-mirror/caf_qca-wifi-host-cmn)（2022-09-29）+ fw-api [`sonyxperiadev`](https://github.com/sonyxperiadev) 镜像 324cb3d（2022-10-07） |
+| 功放 codec | [`raystef66/InfiniR_kernel_alioth`](https://github.com/raystef66/InfiniR_kernel_alioth) 的 tfa98xx codec（NXP TFA98xx 驱动，适配 4.19 与本机 DT） |
+| 音频 machine | 本树 `kona.c` 按联想 `audio_machine_kona.ko` 逆向重建（ELF 表级对齐） |
+| 功放固件 | 联想原厂 `tfa98xx_QS.cnt` / `tfa98xx_YC.cnt`（提取自 stock /vendor/firmware），经 CONFIG_EXTRA_FIRMWARE 烤入 |
+| rmnet 加速 | [`MiCode/vendor_qcom_opensource_data-kernel`](https://github.com/MiCode/vendor_qcom_opensource_data-kernel) alioth-r-oss 分支 `drivers/rmnet/{perf,shs}` |
+| KernelSU | [`backslashxx/KernelSU`](https://github.com/backslashxx/KernelSU) master（v3.3.1+ / 32704 = e0183047）；管理器 APK = [`smith-dog/KernelSU`](https://github.com/smith-dog/KernelSU) fork（含 boot v1/v2 修补支持） |
 
-1. 从 [Release v2.2](https://github.com/smith-dog/kernel-tb371fc/releases/tag/v2.2)
-   下载 `boot-v2.2-kspatched-flash.img`（内嵌 `#789`，KernelSU v3.3.1+ LKM 已在内），
-   并安装同 Release 附带的 KernelSU 管理器 APK（v3.3.1+）。纯净镜像（无
-   KernelSU）= [`boot-v2.2-pure-flash.img`](https://github.com/smith-dog/kernel-tb371fc/releases/download/v2.2/boot-v2.2-pure-flash.img)（同一枚 #789 + 原厂 ramdisk）。旧 v2.0 双镜像（#312 谱系）——两镜像内嵌 Image 字节相同，只差 ramdisk 里
-   有没有 KernelSU：
-   - [`boot-v2.0-kspatched-flash.img`](https://github.com/smith-dog/kernel-tb371fc/releases/download/v2.0/boot-v2.0-kspatched-flash.img)
-     （md5 `b7f5b9284a14c8faabb0a6f6c7d379f6`）——KernelSU LKM 已内置，直刷即有 root
-   - [`boot-v2.0-pure-flash.img`](https://github.com/smith-dog/kernel-tb371fc/releases/download/v2.0/boot-v2.0-pure-flash.img)
-     （md5 `9ec79818758d2b7a753e8dea381b64ab`）——纯净版：原厂 v27n89 ramdisk，
-     不含 KernelSU/ksud（给 APatch 等自带 root 方案，或不需要 root 的用法）
-2. 刷入并重启（`fastboot` 走 USB，刷前核对 `fastboot getvar current-slot`）：
-   ```
-   adb reboot bootloader
-   fastboot flash boot boot-v2.1-kspatched-flash.img   # v2.0 pure 用户继续用旧名
-   fastboot reboot
-   ```
-3. 完成。开机后 `/proc/version` 应为 `Linux version 4.19.325-perf++ ... #312`。
-   WiFi 开机约 15 秒内由内核自动触发连网，扬声器/录音/触摸/144Hz 开箱即用。
+### 回移 / cherry-pick 来源（fusion 合入）
+| 组成 | 来源与作者 |
+|---|---|
+| **Multi-Gen LRU** | 上游 Linux **Yu Zhao（Google）** 的 multi-gen LRU **v14 系列**（后并入主线 v6.1）；回移参考 `mglru-ref/`（v14 mbox + android12-5.4 common-kernel backport）。详见 `Documentation/admin-guide/mm/multigen_lru.rst`。4.19 适配（mm 钩子 / 位域 / bounds / `__assign_bit` 修正）为 fusion 原创 |
+| **TCP BBRv3** | 上游 Linux `net/ipv4/tcp_bbr.c`（`BBR_VERSION 3`），**Google BBR 团队：Neal Cardwell、Yuchung Cheng、C. Stephen Gunn、Soheil Hassas Yeganeh 等**（6.x / 2024 快照，见 `bbrv3-ref/`）。模型代码 verbatim；4.19 兼容头 `tcp_bbr_v3_compat.h` 与协议栈配套为 fusion 原创 |
+| **vsock loopback** | 上游 Linux **5.9** `net/vmw_vsock/vsock_loopback.c` 回移（本机 vsock core 已含 5.9 期 virtio_transport_common 件） |
+| **GPU / 触摸 / 显示修复（#6）** | [`bampudding/linux_kernel_lenovo_tb371fc`](https://github.com/bampudding/linux_kernel_lenovo_tb371fc)（main 2026-10-10 快照）：kgsl gpu_mem eBPF 记账、kgsl dma-buf priv_data 防卫、adreno_a6xx 上电寄存器越界检查、nt36xxx instant-wake、nt36xxx HAL resume 互锁、dsi DSC PPS pic_width 幂等 |
 
-**⚠️ 刷过旧载荷包（tb371fc-dlkm-pkg-fixed.tar.gz，v1.4 及更早教程装过）的，
-刷完新内核后先跑一遍清理脚本**——旧载荷包在新内核上已无用，且每次开机
-仍会尝试加载 7 个失效模块。下载 Release v1.5 中的
-[`tb371fc-payload-cleanup.sh`](https://github.com/smith-dog/kernel-tb371fc/releases/download/v1.5/tb371fc-payload-cleanup.sh)：
+### Fusion 原创
+- MGLRU 的 4.19 适配（fork/exit/exec/sched 钩子、`in_lru_fault`、`LRU_GEN_WIDTH`/`__LRU_REFS_WIDTH`、`next_memory_node`、`__assign_bit` 返回值修正）
+- BBRv3 的 4.19 兼容头与协议栈配套（`icsk_ca_priv` 104→144、`sk_buff.cb[48]`→`[56]`、rate_sample ECN/loss 增量、`inet_diag` v3 字段、`cong_ops->tso_segs`、精确 ECN-ACK）
+- dm-verity kverityd 工作队列调优
+- TFA9894 温重启爆音修复①②（`mute_seq_fix`）
+- clang-21 全树清洁构建修复、boot header v2 重打包工具 [`tb371fc/tools/repack_boot.py`](tb371fc/tools/repack_boot.py)（继承上游并修正 `dtb_size` quirk）
 
-```
-adb push tb371fc-payload-cleanup.sh /data/local/tmp/
-adb shell "su -c 'sh /data/local/tmp/tb371fc-payload-cleanup.sh'"
-```
-
-脚本只做移动（全部文件进 `/sdcard/Download/tb371fc-payload-removed-<时间>/`，
-可随时移回），不删除任何东西；在旧内核上运行会被拒绝（旧内核仍依赖载荷包）。
-清理完成后重启即可。
-
-**日后升级 KernelSU**：直接在管理器内升级；或换刷新版 kspatched 镜像，内核无需重刷。
-
-<details>
-<summary>备选方法（要换 root 方案 / 想自己打镜像：用本仓库 tools 重打包）</summary>
-
-v2.0 除 kspatched 镜像外也直接发布纯净镜像 `boot-v2.0-pure-flash.img`（同一枚 `#312`
-Image + 原厂 v27n89 无 KSU ramdisk）。若要把它打进你自己的基底镜像（换 ramdisk /
-dtbo 组合），不必依赖任何旧版纯净包：
-
-1. 按下面「自己编译」构建出 `arch/arm64/boot/Image`（或直接取 Release 内任一镜像
-   拆出的 Image，两者字节相同），
-2. 用 [`tb371fc/tools/repack_boot.py`](tb371fc/tools/repack_boot.py) 保留 v2 头 /
-   ramdisk / DTB 尾打进你的基底镜像（原厂 `dtb_size` quirk 已在工具内修正），
-3. `fastboot flash boot <out.img>` + `fastboot reboot`。
-
-   只想复刻本次出货的那枚 pure 镜像，直接跑
-   [`tb371fc/scripts/repack-pure-boot.sh`](tb371fc/scripts/repack-pure-boot.sh)
-   `<纯基底.img> <Image> <out.img>`——它先断言基底 ramdisk 内没有 `kernelsu.ko`，
-   再从**输出字节**读回内嵌 Image 的 md5 与 ramdisk 清单（Release v2.0 的 pure 资产即由它产出）。
-
-**自己 insmod KernelSU LKM** 的，用 Release v2.0 的
-[`ksu-v2.1.ko`](https://github.com/smith-dog/kernel-tb371fc/releases/download/v2.1/ksu-v2.1.ko)
-（305608 B，md5 `e451369be5765ad517312e9f545698f0`，与 kspatched 镜像 ramdisk 内嵌那枚**字节相同**，
-vermagic `4.19.325-perf++ SMP preempt mod_unload modversions aarch64`）。
-⚠ v1.5 及更早的 `ksu-v27n*.ko` vermagic 仍是 `4.19.198-perf++`，且 `CONFIG_MODVERSIONS=y` 要求符号 CRC
-对上本版构建——老 `.ko` 在本内核上直接 `Invalid module format`。管理器 APK 不用换：
-`KERNEL_SU_UAPI_VERSION` 仍是 4，本版 `drivers/kernelsu/` 只改了 `kernel_compat.h` 的 16 行构建修复。
-
-</details>
+> 联想未随 GPL dump 公开的部分（如 144Hz 显示驱动、部分面板参数）不在本树，对应功能保持原厂形态。
 
 ---
 
 ## 自己编译 / Build from source
 
-环境：WSL2 Ubuntu + **Ubuntu clang 21.1.8** + aarch64-linux-gnu binutils 2.46。
-出货 v2.0 的编译横幅即为此组合（`Linux version 4.19.325-perf++ (smith@PC)
-(Ubuntu clang version 21.1.8 (6ubuntu1), GNU ld (GNU Binutils for Ubuntu) 2.46) #312`）；
-v1.9 及更早用 Snapdragon LLVM 10.0.7，改用发行版 clang 后 `-perf+` 后缀仍与原厂一致。
+环境：**Ubuntu clang 21.1.8**（`/usr/lib/llvm-21/bin`）+ aarch64-linux-gnu binutils 2.46。
+fusion 构建横幅：`Linux version 4.19.325-perf++ (yuki@yuki) (Ubuntu clang version 21.1.8 (6ubuntu1), GNU ld (GNU Binutils for Ubuntu) 2.46) #8`。
 
-内核配置：`cp tb371fc/config-v2.0.txt .config`（= v2.0 出货配置，与设备
-`/proc/config.gz` 排序后逐行相等）。dev 分支常驻的诊断插桩（netconsole、
-kmsg 记录仪、hung/softlockup detector 等）按发布惯例在发布件里关闭，
-清单见 `tb371fc/config-dev-fragment.txt`。
+配置：以 `tb371fc/config-v2.2.txt` 为基底，开启 fusion 增量：
+`CONFIG_LRU_GEN=y` / `CONFIG_LRU_GEN_ENABLED=y` / `CONFIG_LRU_GEN_STATS=y`、
+`CONFIG_TCP_CONG_BBR=y` / `CONFIG_DEFAULT_BBR=y`（`CONFIG_DEFAULT_TCP_CONG="bbr"`）。
 
 ```bash
 KV=$(pwd)
+export PATH=/usr/lib/llvm-21/bin:$PATH
 FLAGS="ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang CLANG_TRIPLE=aarch64-linux-gnu- AS=aarch64-linux-gnu-as"
 KC="KCFLAGS=-Wno-error -Wno-error=strict-prototypes -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=date-time -include $KV/drivers/staging/fw-api/fw/p226_compat.h"
 # 内核镜像（DYNAMIC_SINGLE_CHIP 决定 qcacld 取 qca6390 变体）
-make -j6 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 Image
-# 模块链 + KernelSU LKM（同一棵树同一份 .config，别混用旧产物）
-make -j6 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 modules
-make -j6 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 M=drivers/kernelsu modules
-# 打包 boot 镜像（保留 v2 头、ramdisk、DTB 尾；ramdisk 里 kernelsu.ko 换成上面编出的）
-python3 tb371fc/tools/repack_boot.py <base.img> arch/arm64/boot/Image out/boot.img "" <ramdisk-new.gz>
+make -j16 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 Image
+# 模块链 + KernelSU LKM（同一棵树同一份 .config）
+make -j16 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 modules
+make -j16 $FLAGS $KC DYNAMIC_SINGLE_CHIP=qca6390 M=drivers/kernelsu modules
+# 打包 boot 镜像（保留 v2 头 / ramdisk / DTB 尾）
+python3 tb371fc/tools/repack_boot.py <base.img> arch/arm64/boot/Image out/boot.img
 ```
 
-**发布件自检**（这几条是本仓库构建脚本的门禁，自己编完值得跑一遍）：
-- `strings arch/arm64/boot/Image | grep -iE "t58|hidg ep0|recorder thread started"` 必须为空（诊断件确实没跟进来）；
-- `llvm-nm drivers/mmc/core/core.o | grep "U mmc_retune_hold"` 必须命中——这句在厂商原树里被一个
-  **无 Kconfig 条目**的 `#ifdef` 守卫吃掉，编没编进去只有对象级检查看得出来；
-- `grep -E "^CONFIG_VSERVICES_SERIAL=" .config` 应为 `=y`：v1.9 起出厂开启的 vservices 串口驱动曾被
-  .325 合并连带删掉 Kconfig 条目（源码与 `obj-` 行都在，所以零报错零警告地消失），v2.0 已恢复。
+- WiFi 为 2022 世代 qcacld 三仓（`drivers/staging/` 下 qcacld-3.0 / qca-wifi-host-cmn / fw-api，体积原因不入 git），完整重建见 `tb371fc/scripts/p224-build.sh`。
+- `CONFIG_KSU=m` 时 ksu.ko 需本树 `drivers/ksu_sym.c`（非公开符号 EXPORT 垫片，已内建）。
+- techpack display/audio/camera/video 源码已全部入库，仅构建产物被忽略。
 
-**v1.5 构建注意**：WiFi 驱动为 2022 世代 qcacld 三仓（`drivers/staging/` 下
-qcacld-3.0/qca-wifi-host-cmn/fw-api，体积原因不入 git），完整重建请用
-`tb371fc/scripts/p224-build.sh`（自动换装+补丁+构建+打包 boot 镜像），
-外部源检出说明见脚本头注释。
+## 刷入 / Flash
 
-LKM 注意：`CONFIG_KSU=m` 时 ksu.ko 需要本树 `drivers/ksu_sym.c`
-（48 个非公开符号的 EXPORT 垫片，已内建在树中）。`tb371fc/tools/` 内含
-repack/insmod128/dtbo 等工具与源码（[tools 目录](https://github.com/smith-dog/kernel-tb371fc/tree/main/tb371fc/tools)）。
+> 前提：Bootloader 已解锁（`fastboot flashing unlock`）。A/B 设备，刷前核对 `fastboot getvar current-slot`。
 
-techpack 说明：display/audio/camera/video 四个驱动目录的源码已全部入库
-（与出货内核一致，相机 KMD 内建；v1.5 起音频栈整体 =y 内建），仅构建产物
-（*.o/*.a/*.cmd 等）被忽略。
+```bash
+adb reboot bootloader
+fastboot flash boot out/boot.img      # 持久刷入当前 slot 的 boot 分区
+fastboot reboot
+```
 
----
+- **刷前备份**（便于回滚）：`adb shell su -c 'dd if=/dev/block/bootdevice/by-name/boot_a of=/data/local/tmp/boot-backup.img'` 再 `adb pull`。
+- **回滚**：`fastboot flash boot boot-backup.img`。本次音频修复落刷前的备份与镜像 md5 见 [CHANGES-20261117.md](CHANGES-20261117.md)。
+- 升级 KernelSU 直接在管理器内完成，内核无需重刷（LKM 解耦）。
+- 刷过旧载荷包（v1.4 及更早 `tb371fc-dlkm-pkg-fixed.tar.gz`）的，先跑上游 Release v1.5 的 `tb371fc-payload-cleanup.sh`（只移动不删除）。
 
-## 源代码来自哪里 / Provenance
+## 上游 Release / Upstream
 
-| 组成 | 来源 |
-|---|---|
-| 内核基线 | [lss4/android_kernel_lenovo_paladin](https://github.com/lss4/android_kernel_lenovo_paladin)（分支 11）——社区开发者整理开源的联想官方 GPL 包（TB-Q706F/Z，代号 paladin，4.19.157 与 TB371FC stock 同版本，含联想板级代码） |
-| stable 采纳（v2.0） | [gregkh/linux](https://github.com/gregkh/linux) 分支 `linux-4.19.y`：本树把 **v4.19.157 → v4.19.325** 的上游内容整体合并进 `main`（168 个 stable 发布）。仓库内 tag `v4.19.157` / `v4.19.325` 指向上游**原提交**（Greg KH 署名，非本地合成快照），完整祖先链随本仓库发布 |
-| 显示栈 | CodeLinaro [msm-4.19 @ LA.UM.9.12.r1-18500-SMxx50.QSSI14.0](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0)（vanilla techpack/display；双击唤醒通知钩子 p140/p174 位于 dsi_display.c） |
-| 音频核心栈 | 同上 CLO tag 的 [techpack/audio](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0/techpack/audio)（v1.4 编为 dlkm 模块；v1.5 起整体 =y 内建） |
-| 相机 KMD | 同上 CLO tag 的 [techpack/camera](https://git.codelinaro.org/clo/la/kernel/msm-4.19/-/tree/LA.UM.9.12.r1-18500-SMxx50.QSSI14.0/techpack/camera)（SPECTRA_CAMERA=y，内建） |
-| 视频硬解 | [MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource) kona 分支的 msm_vidc（compatible 完全匹配） |
-| USB 相机 | 内核主线 drivers/media/usb/gspca（v1.5 由模块转内建） |
-| 触摸/背光驱动 | [tem423/android_kernel_lenovo_tb371fc](https://github.com/tem423/android_kernel_lenovo_tb371fc)（TB371FC 社区内核；本树合入其 nt36532 SPI 触摸驱动与 ktz8866a/b 双芯片背光驱动） |
-| WiFi 驱动 | 2022 世代 qcacld 三仓（驱动 v5.2.0.190I）：qcacld-3.0 与 [arter97-mirror/caf_qca-wifi-host-cmn](https://github.com/arter97-mirror/caf_qca-wifi-host-cmn)（2022-09-29 检出）、fw-api 取 [sonyxperiadev](https://github.com/sonyxperiadev) 镜像 324cb3d（2022-10-07，与设备固件 WLAN.HST.1.0.1.r1-01596 同日）；v1.5 内建 + 内核侧 boot_wlan 自触发（p267） |
-| 功放 codec | [InfiniR_kernel_alioth](https://github.com/raystef66/InfiniR_kernel_alioth) 的 tfa98xx codec（适配 4.19 与本机 DT，v1.5 内建） |
-| 音频 machine | 本树 kona.c 按联想 `audio_machine_kona.ko` 逆向重建（ELF 表级对齐，v1.5 内建） |
-| 功放固件 | 联想原厂 `tfa98xx_QS.cnt`（提取自 stock /vendor/firmware），经 CONFIG_EXTRA_FIRMWARE 烤入内核（v1.5） |
-| rmnet 加速 | [MiCode/vendor_qcom_opensource_data-kernel](https://github.com/MiCode/vendor_qcom_opensource_data-kernel) alioth-r-oss 分支 drivers/rmnet/{perf,shs}（v1.5 内建） |
-| KernelSU | [backslashxx/KernelSU](https://github.com/backslashxx/KernelSU) master 同步（v3.3.1+ / 32704 = e0183047；管理器 APK = 本项目 fork 构建：[smith-dog/KernelSU](https://github.com/smith-dog/KernelSU) master，含 boot v1/v2 修补支持 ver<1 补丁） |
-| 本项目 | p1~p371 补丁（[tb371fc/scripts](https://github.com/smith-dog/kernel-tb371fc/tree/main/tb371fc/scripts)），全部以上述来源为基础 |
+基线功能的成品镜像与管理器 APK 见上游 [`smith-dog/kernel-tb371fc` Releases](https://github.com/smith-dog/kernel-tb371fc/releases)（v2.2 等）。
+fusion fork 自行构建上述新增功能镜像；逐条变更与验证状态见 [CHANGES-20261117.md](CHANGES-20261117.md)。
 
-联想未随 GPL dump 公开的部分（如 144Hz 显示驱动、部分面板参数）不在本树，
-对应功能保持原厂形态。
-
-## 📖 详细构建与 Root 流程
-
-见 [docs/NOTE-build-and-root.md](docs/NOTE-build-and-root.md)——含管理器修补
-分步操作、root 自举原理（为什么不能直刷纯净内核）、开机模块自动化部署、
-以及全部踩坑表。
+## 详细文档
+- [CHANGES-20261117.md](CHANGES-20261117.md) — 最近一批补丁（MGLRU / BBRv3 / dm-verity / 音频爆音）逐条说明、构建 #8 与落刷验证、回滚。
+- [docs/NOTE-build-and-root.md](docs/NOTE-build-and-root.md) — 管理器修补分步、root 自举原理、开机模块自动化部署、踩坑表。
 
 ## License
 
-GPL-2.0（继承内核及联想 GPL 发布）。
+GPL-2.0（继承 Linux 内核、联想 GPL 发布及上述各上游项目的许可）。
+各回移代码保留其原始版权与署名（MGLRU：Yu Zhao / Google；BBRv3：Google BBR 团队；
+vsock loopback：上游 5.9；bampudding 修复：bampudding；KernelSU：backslashxx / tiann）。
