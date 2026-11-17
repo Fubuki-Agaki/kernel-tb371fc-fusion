@@ -383,6 +383,8 @@ static inline void tcp_dec_quickack_mode(struct sock *sk)
 #define	TCP_ECN_QUEUE_CWR	2
 #define	TCP_ECN_DEMAND_CWR	4
 #define	TCP_ECN_SEEN		8
+#define	TCP_ECN_LOW		16	/* shallow-threshold ECN (BBRv3) */
+#define	TCP_ECN_ECT_PERMANENT	32	/* keep ECT set after CWR (BBRv3) */
 
 enum tcp_tw_status {
 	TCP_TW_SUCCESS = 0,
@@ -874,6 +876,9 @@ struct tcp_skb_cb {
 			      unused:1;
 			/* pkts S/ACKed so far upon tx of skb, incl retrans: */
 			__u32 delivered;
+			/* BBRv3 delivery snapshots at tx (modular counters): */
+			__u32 delivered_ce:20,	/* tp->delivered_ce at tx */
+			      lost:12;		/* tp->lost at tx */
 			/* start of send pipeline phase */
 			u64 first_tx_mstamp;
 			/* when we reached the "delivered" count */
@@ -894,6 +899,9 @@ struct tcp_skb_cb {
 };
 
 #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
+
+#define TCPCB_DELIVERED_CE_MASK	((1U << 20) - 1)
+#define TCPCB_LOST_MASK		((1U << 12) - 1)
 
 static inline void bpf_compute_data_end_sk_skb(struct sk_buff *skb)
 {
@@ -986,6 +994,7 @@ enum tcp_ca_event {
 	CA_EVENT_LOSS,		/* loss timeout */
 	CA_EVENT_ECN_NO_CE,	/* ECT set, but not CE marked */
 	CA_EVENT_ECN_IS_CE,	/* received CE marked IP packet */
+	CA_EVENT_TLP_RECOVERY,	/* TLP probe repaired a tail loss (BBRv3) */
 };
 
 /* Information about inbound ACK, passed to cong_ops->in_ack_event() */
@@ -1028,7 +1037,12 @@ struct ack_sample {
 struct rate_sample {
 	u64  prior_mstamp; /* starting timestamp for interval */
 	u32  prior_delivered;	/* tp->delivered at "prior_mstamp" */
+	u32  prior_delivered_ce;/* tp->delivered_ce at "prior_mstamp" (BBRv3) */
+	u32  prior_lost;	/* tp->lost at "prior_mstamp" (BBRv3) */
+	u32  tx_in_flight;	/* packets in flight at starting timestamp (BBRv3) */
 	s32  delivered;		/* number of packets delivered over interval */
+	s32  delivered_ce;	/* packets delivered w/ CE mark over interval (BBRv3) */
+	s32  lost;		/* number of packets lost over interval (BBRv3) */
 	long interval_us;	/* time for tp->delivered to incr "delivered" */
 	u32 snd_interval_us;	/* snd interval for delivered packets */
 	u32 rcv_interval_us;	/* rcv interval for delivered packets */
@@ -1039,6 +1053,8 @@ struct rate_sample {
 	bool is_app_limited;	/* is sample from packet with bubble in pipe? */
 	bool is_retrans;	/* is sample from retransmission? */
 	bool is_ack_delayed;	/* is this (likely) a delayed ACK? */
+	bool is_ece;		/* did this ACK have ECN marked? (BBRv3) */
+	bool is_acking_tlp_retrans_seq; /* ACKed a TLP retransmit sequence? (BBRv3) */
 };
 
 struct tcp_congestion_ops {
@@ -1067,6 +1083,8 @@ struct tcp_congestion_ops {
 	void (*pkts_acked)(struct sock *sk, const struct ack_sample *sample);
 	/* override sysctl_tcp_min_tso_segs */
 	u32 (*min_tso_segs)(struct sock *sk);
+	/* override TSO/GSO segment count at transmit (optional, BBRv3) */
+	u32 (*tso_segs)(struct sock *sk, unsigned int mss_now);
 	/* returns the multiplier used in tcp_sndbuf_expand (optional) */
 	u32 (*sndbuf_expand)(struct sock *sk);
 	/* call when packets are delivered to update cwnd and pacing rate,
